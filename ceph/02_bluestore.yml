@@ -1,0 +1,75 @@
+---
+- name: 1. FETCHING BOOTSTRAP-OSD KEYRING
+  gather_facts: false
+  become: true
+  hosts: bootstrap
+  tasks:
+    - name: Fetching keyring
+      ansible.builtin.command: cephadm shell -- ceph auth get-or-create client.bootstrap-osd
+      register: client_bootstrap_osd
+      ignore_errors: true
+    - name: Saving keyring
+      ansible.builtin.copy:
+        content: "{{ client_bootstrap_osd.stdout }}.s"
+        dest: /tmp/ceph.keyring
+        mode: '0644'
+      delegate_to: localhost
+
+- name: 2. PROPAGATING BOOTSTRAP-OSD KEYRING
+  tags: osd
+  vars_files:
+    - vars.yml
+  vars:
+    # WARNING: Double check storage geometry with the prospect node's available disks, then set the following variables in vars.yml
+    datadisk: "{{ ceph_data_disks }}"
+    dbwal: "{{ ceph_dbwal_disk }}"
+  gather_facts: true
+  become: true
+  hosts: osd
+  pre_tasks:
+    - name: Installing ceph-osd and ceph-common
+      tags: wal, db
+      ansible.builtin.apt:
+        name:
+          - ceph-osd
+          - ceph-common
+        state: present
+    - name: Creating /var/lib/ceph/bootstrap-osd
+      ansible.builtin.file:
+        path: /var/lib/ceph/bootstrap-osd
+        state: directory
+        mode: '0644'
+    - name: Propagating bootstrap-osd keyring
+      ansible.builtin.copy:
+        src: /tmp/ceph.keyring
+        dest: /var/lib/ceph/bootstrap-osd/ceph.keyring
+        mode: '0644'
+  tasks:
+    - name: Creating VG on DB/WAL disk
+      tags: wal, db
+      community.general.lvg:
+        vg: wal_db
+        pvs: "{{ dbwal }}"
+        state: present
+    # WAL - Write Ahead Log
+    - name: Creating WAL logical volumes
+      tags: wal
+      community.general.lvol:
+        vg: wal_db
+        lv: "'wal_db-'{{ item[-3:] }}'-wal'"
+        size: 10G
+        state: present
+      loop: "{{ datadisk }}"
+    # DB - RocksDB (for metadata)
+    - name: Creating DB logical volumes
+      tags: db
+      community.general.lvol:
+        vg: wal_db
+        lv: "'wal_db-'{{ item[-3:] }}'-db'"
+        size: 40G
+        state: present
+      loop: "{{ datadisk }}"
+    # DATA - Data logical volumes
+    - name: Provisioning DATA volumes, preparing geometry
+      tags: LUN1
+      ansible.builtin.script: ./scripts/bluestore-prepare.py

@@ -1,0 +1,24 @@
+---
+ceph_release: quincy
+ceph_pub_key: null
+cephadm_curl: null
+ceph_repo: null
+cephadm_inst: null
+ceph_conf: null
+<<<<<<< HEAD
+ceph_secret: "AQDzEfZjq1hzORAAFnTtHK/xhkCXVxp4gKXM+A==" # cat ceph.client.admin.keyring on orch node
+ceph_user: "admin"
+=======
+ceph_secret: "AQDzEfZjq1hzORAAFnTtHK/xhkCXVxp4gKXM+A==" # cat ceph.client.admin.keyring
+ceph_user: "admin"
+# data disks from bluestore
+ceph_data_disks:
+  - /dev/vdb
+  - /dev/vdc
+  - /dev/vdd
+  - /dev/vde
+  - /dev/vdf
+  - /dev/vdg
+  - /dev/vdh
+ceph_dbwal_disk: /dev/vdi
+>>>>>>> isolate-ceph-bluestore-values

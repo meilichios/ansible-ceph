@@ -1,0 +1,9 @@
+---
+- name: WIPING BLUESTORE LUNs FROM OSD NODES
+  hosts: osd
+  gather_facts: false
+  become: true
+  pre_tasks:
+  tasks:
+    - name: Destroying all volumes
+      ansible.builtin.script: ./scripts/wipe_lvm.py

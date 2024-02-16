@@ -1,0 +1,9 @@
+---
+- name: 1. ACTIVATING BLUESTORE LUNs
+  gather_facts: false
+  become: true
+  hosts: osd
+  tasks:
+    - name: Mapping LUN -> OSD
+      ansible.builtin.script: ./scripts/bluestore-activate.py
+      ignore_errors: true

@@ -1,0 +1,166 @@
+---
+- name: 1. DEPLOYING BASIC CONFIGURATION ON ALL CLUSTER NODES
+  tags: base
+  vars_files:
+    - vars.yml
+  gather_facts: true
+  become: true
+  hosts: ceph
+  tasks:
+    - name: Checking installation of python3, systemd, chrony, lvm2, curl, wget
+      ansible.builtin.apt:
+        name:
+          - python3
+          - systemd
+          - chrony
+          - lvm2
+          - curl
+          - wget
+        state: present
+    - name: Enabling 3rd party repo for podman # TODO: upgrade to Ubuntu 20.10 or newer and switch to ubuntu repo
+      ansible.builtin.shell: sh -c "echo 'deb http://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_{{ ansible_distribution_version }}/ /' > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list"
+      args:
+        executable: /bin/bash
+    - name: Downloading & registering 3rd party repo key # TODO: upgrade to Ubuntu 20.10 or newer and switch to ubuntu repo
+      ansible.builtin.shell: wget -nv https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable/xUbuntu_{{ ansible_distribution_version }}/Release.key -O- | apt-key add -
+      args:
+        executable: /bin/bash
+    - name: Updating all packages
+      ansible.builtin.apt:
+        name: "*"
+        update_cache: true
+        state: present
+    - name: Installing podman
+      ansible.builtin.apt:
+        name: podman
+        state: present
+    - name: Activating chrony service
+      ansible.builtin.systemd:
+        name: chrony
+        enabled: true
+        state: started
+
+- name: 2. BOOTSTRAPPING CLUSTER
+  tags: bootstrap
+  vars_files:
+    - vars.yml
+  gather_facts: true
+  become: true
+  hosts: bootstrap
+  pre_tasks:
+    - name: Checking if cephadm exists in /root/
+      ansible.builtin.stat:
+        path: /root/cephadm
+      register: cephadm_curl
+    - name: Downloading cephadm for selected ceph_release if not existing
+      ansible.builtin.get_url:
+        url: https://github.com/ceph/ceph/raw/{{ ceph_release }}/src/cephadm/cephadm
+        dest: /root/
+        mode: '0550'
+      when: cephadm_curl.stat.exists == false
+    - name: Checking Ceph repository installation
+      ansible.builtin.stat:
+        path: /etc/apt/sources.list.d/ceph.list
+      register: ceph_repo
+    - name: Adding repo for selected ceph_release
+      ansible.builtin.command: chdir=/root/ ./cephadm add-repo --release {{ ceph_release  }}
+      when: ceph_repo.stat.exists == false
+    - name: Checking for previous cephadm installations
+      ansible.builtin.stat:
+        path: /usr/sbin/cephadm
+      register: cephadm_inst
+    - name: Installing cephadm to /usr/sbin
+      ansible.builtin.command: chdir=/root/ ./cephadm install
+      when: cephadm_inst.stat.exists == false
+    - name: Checking for previously executed bootstrap
+      ansible.builtin.stat:
+        path: /etc/ceph/ceph.pub
+      register: ceph_conf
+  tasks:
+    - name: Running Ceph Cluster Bootstrap
+      ansible.builtin.command: chdir=/root/ cephadm bootstrap --mon-ip {{ ansible_host }}
+      when: ceph_conf.stat.exists == false
+  post_tasks:
+    - name: Fetching bootstrap node public key
+      tags: key
+      ansible.builtin.fetch:
+        src: /etc/ceph/ceph.pub
+        flat: true
+        dest: /tmp/
+    - name: Fetching bootstrap node ceph.conf
+      tags: config
+      ansible.builtin.fetch:
+        src: /etc/ceph/ceph.conf
+        flat: true
+        dest: /tmp/
+    - name: Fetching bootstrap node ceph.client.admin.keyring
+      tags: config
+      ansible.builtin.fetch:
+        src: /etc/ceph/ceph.client.admin.keyring
+        flat: true
+        dest: /tmp/
+
+- name: 3. PROPAGATING CEPH CLUSTER PUBLIC KEY,  CONFIG & KEYRING
+  tags: bootstrap
+  vars_files:
+    - vars.yml
+  gather_facts: false
+  become: true
+  hosts: ceph:!bootstrap
+  tasks:
+    - name: Copying temporary key file
+      tags: key
+      ansible.builtin.copy:
+        src: /tmp/ceph.pub
+        dest: /tmp/ceph.pub
+        mode: '0644'
+    - name: Propagating public key
+      tags: key
+      ansible.builtin.blockinfile:
+        backup: true
+        path: /root/.ssh/authorized_keys
+        block: |
+          {{ lookup('file', '/tmp/ceph.pub') }}
+        state: present
+    - name: Creating /etc/ceph
+      tags: config
+      ansible.builtin.file:
+        path: /etc/ceph
+        state: directory
+        mode: '0644'
+    - name: Propagating ceph.conf
+      tags: config
+      ansible.builtin.copy:
+        src: /tmp/ceph.conf
+        dest: /etc/ceph/ceph.conf
+        mode: '0644'
+    - name: Propagating admin keyring
+      tags: config
+      ansible.builtin.copy:
+        src: /tmp/ceph.client.admin.keyring
+        dest: /etc/ceph/ceph.client.admin.keyring
+        mode: '0644'
+
+- name: 4. SETTING UP ADMIN NODES
+  tags: admin
+  vars_files:
+    - vars.yml
+  gather_facts: true
+  become: true
+  hosts: admin
+  tasks:
+    - name: Installing ceph-common and cephadm
+      ansible.builtin.apt:
+        name:
+          - ceph-common
+          - cephadm
+        state: present
+  post_tasks:
+    - name: Setting up aliases
+      ansible.builtin.blockinfile:
+        path: /root/.bash_aliases
+        block: |
+          alias ceph="cephadm shell -- ceph"
+        state: present
+        create: true
+        mode: '0644'
